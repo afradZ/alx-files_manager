@@ -1,7 +1,7 @@
+import { ObjectId } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs';
 import path from 'path';
-import mime from 'mime-types';
 import dbClient from '../utils/db';
 import redisClient from '../utils/redis';
 
@@ -11,10 +11,12 @@ class FilesController {
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
 
     try {
+      // Verify user
       const key = `auth_${token}`;
       const userId = await redisClient.get(key);
       if (!userId) return res.status(401).json({ error: 'Unauthorized' });
 
+      // Validate request body
       const { name, type, parentId = '0', isPublic = false, data } = req.body;
       
       if (!name) return res.status(400).json({ error: 'Missing name' });
@@ -25,21 +27,25 @@ class FilesController {
         return res.status(400).json({ error: 'Missing data' });
       }
 
+      // Validate parent if exists
       if (parentId !== '0') {
-        const parentFile = await dbClient.db.collection('files').findOne({ _id: parentId });
+        const parentFile = await dbClient.db.collection('files').findOne({ 
+          _id: ObjectId(parentId) 
+        });
         if (!parentFile) return res.status(400).json({ error: 'Parent not found' });
         if (parentFile.type !== 'folder') {
           return res.status(400).json({ error: 'Parent is not a folder' });
         }
       }
 
+      // Handle folder creation
       if (type === 'folder') {
         const result = await dbClient.db.collection('files').insertOne({
-          userId,
+          userId: ObjectId(userId),
           name,
           type,
           isPublic,
-          parentId,
+          parentId: parentId === '0' ? '0' : ObjectId(parentId),
         });
         return res.status(201).json({
           id: result.insertedId,
@@ -51,6 +57,7 @@ class FilesController {
         });
       }
 
+      // Handle file upload
       const folderPath = process.env.FOLDER_PATH || '/tmp/files_manager';
       if (!fs.existsSync(folderPath)) {
         fs.mkdirSync(folderPath, { recursive: true });
@@ -63,11 +70,11 @@ class FilesController {
       fs.writeFileSync(localPath, fileContent);
 
       const result = await dbClient.db.collection('files').insertOne({
-        userId,
+        userId: ObjectId(userId),
         name,
         type,
         isPublic,
-        parentId,
+        parentId: parentId === '0' ? '0' : ObjectId(parentId),
         localPath,
       });
 
@@ -88,48 +95,6 @@ class FilesController {
 }
 
 export default FilesController;
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
