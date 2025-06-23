@@ -1,31 +1,40 @@
-iimport mongoose from 'mongoose';
+import { MongoClient } from 'mongodb';
 
 class DBClient {
   constructor() {
     const host = process.env.DB_HOST || 'localhost';
     const port = process.env.DB_PORT || 27017;
     const database = process.env.DB_DATABASE || 'files_manager';
-    const uri = `mongodb://${host}:${port}/${database}`;
+    const url = `mongodb://${host}:${port}`;
 
-    mongoose.connect(uri, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    });
-
-    this.db = mongoose.connection;
-    this.db.on('error', (err) => console.error('MongoDB error:', err));
+    this.client = new MongoClient(url, { useUnifiedTopology: true });
+    this.client.connect()
+      .then(() => {
+        this.db = this.client.db(database);
+      })
+      .catch((err) => console.error('MongoDB connection error:', err));
   }
 
   isAlive() {
-    return this.db.readyState === 1;
+    return !!this.client && this.client.isConnected();
   }
 
   async nbUsers() {
-    return mongoose.connection.db.collection('users').countDocuments();
+    try {
+      return await this.db.collection('users').countDocuments();
+    } catch (err) {
+      console.error('Error counting users:', err);
+      return 0;
+    }
   }
 
   async nbFiles() {
-    return mongoose.connection.db.collection('files').countDocuments();
+    try {
+      return await this.db.collection('files').countDocuments();
+    } catch (err) {
+      console.error('Error counting files:', err);
+      return 0;
+    }
   }
 }
 
