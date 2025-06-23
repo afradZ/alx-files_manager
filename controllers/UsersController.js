@@ -1,7 +1,7 @@
 import { ObjectId } from 'mongodb';
 import sha1 from 'sha1';
 import dbClient from '../utils/db';
-import redisClient from '../utils/redis';
+import { userQueue } from '../worker';
 
 class UsersController {
   static async postNew(req, res) {
@@ -17,9 +17,7 @@ class UsersController {
 
     try {
       // Check if email already exists
-      const existingUser = await dbClient.db
-        .collection('users')
-        .findOne({ email });
+      const existingUser = await dbClient.db.collection('users').findOne({ email });
       if (existingUser) {
         return res.status(400).json({ error: 'Already exist' });
       }
@@ -31,6 +29,17 @@ class UsersController {
       const result = await dbClient.db.collection('users').insertOne({
         email,
         password: hashedPassword,
+      });
+
+      // Add welcome email job to queue
+      userQueue.add({
+        userId: result.insertedId.toString(),
+      }, {
+        attempts: 3, // Retry 3 times if fails
+        backoff: {
+          type: 'exponential',
+          delay: 1000, // 1s, 2s, 4s delays between retries
+        },
       });
 
       // Return new user (without password)
@@ -47,32 +56,26 @@ class UsersController {
   static async getMe(req, res) {
     const token = req.headers['x-token'];
     
-    // Check if token exists
     if (!token) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
     try {
-      // Get user ID from Redis
       const key = `auth_${token}`;
       const userId = await redisClient.get(key);
       
-      // Validate user ID
       if (!userId) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      // Get user from MongoDB
-      const user = await dbClient.db
-        .collection('users')
-        .findOne({ _id: new ObjectId(userId) });
+      const user = await dbClient.db.collection('users').findOne({ 
+        _id: ObjectId(userId) 
+      });
 
-      // Check if user exists
       if (!user) {
         return res.status(401).json({ error: 'Unauthorized' });
       }
 
-      // Return user info (without password)
       return res.status(200).json({
         id: user._id,
         email: user.email,

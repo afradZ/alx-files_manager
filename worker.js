@@ -1,56 +1,88 @@
 import Bull from 'bull';
-import { promises as fs } from 'fs';
-import path from 'path';
-import imageThumbnail from 'image-thumbnail';
-import dbClient from './utils/db';
+import dbClient from './db';
+import redisClient from './redis';
 
-// Initialize the queue
+// Initialize queues
 const fileQueue = new Bull('fileQueue', {
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
-    port: process.env.REDIS_PORT || 6379
-  }
+    port: process.env.REDIS_PORT || 6379,
+  },
 });
 
+const userQueue = new Bull('userQueue', {
+  redis: {
+    host: process.env.REDIS_HOST || 'localhost',
+    port: process.env.REDIS_PORT || 6379,
+  },
+});
+
+// Process file queue for thumbnails
 fileQueue.process(async (job) => {
   const { fileId, userId } = job.data;
   
-  // Validate job data
-  if (!fileId) {
-    throw new Error('Missing fileId');
+  if (!fileId) throw new Error('Missing fileId');
+  if (!userId) throw new Error('Missing userId');
+
+  const file = await dbClient.db.collection('files').findOne({
+    _id: dbClient.ObjectId(fileId),
+    userId: dbClient.ObjectId(userId),
+  });
+
+  if (!file) throw new Error('File not found');
+  if (file.type !== 'image') return;
+
+  const sizes = [500, 250, 100];
+  for (const size of sizes) {
+    const thumbnail = await imageThumbnail(file.localPath, { width: size });
+    const thumbnailPath = `${file.localPath}_${size}`;
+    await fs.promises.writeFile(thumbnailPath, thumbnail);
   }
+});
+
+// Process user queue for welcome emails
+userQueue.process(async (job) => {
+  const { userId } = job.data;
+
+  // Validate job data
   if (!userId) {
     throw new Error('Missing userId');
   }
 
-  // Verify file exists in database
-  const file = await dbClient.db.collection('files').findOne({
-    _id: dbClient.ObjectId(fileId),
-    userId: dbClient.ObjectId(userId)
+  // Get user from database
+  const user = await dbClient.db.collection('users').findOne({
+    _id: dbClient.ObjectId(userId),
   });
 
-  if (!file) {
-    throw new Error('File not found');
+  if (!user) {
+    throw new Error('User not found');
   }
 
-  // Only process image files
-  if (file.type !== 'image') {
-    return;
-  }
-
-  // Generate thumbnails
-  const sizes = [100, 250, 500];
-  const thumbnailPromises = sizes.map(async (size) => {
-    try {
-      const thumbnail = await imageThumbnail(file.localPath, { width: size });
-      const thumbnailPath = `${file.localPath}_${size}`;
-      await fs.writeFile(thumbnailPath, thumbnail);
-    } catch (err) {
-      console.error(`Error generating ${size}px thumbnail:`, err);
-    }
+  // In production: Replace with actual email sending code
+  console.log(`Welcome ${user.email}!`);
+  /* 
+  // Example with Mailgun:
+  const mg = mailgun({
+    apiKey: process.env.MAILGUN_API_KEY,
+    domain: process.env.MAILGUN_DOMAIN
   });
-
-  await Promise.all(thumbnailPromises);
+  
+  await mg.messages().send({
+    from: 'Welcome <welcome@yourdomain.com>',
+    to: user.email,
+    subject: 'Welcome to our platform!',
+    text: `Hello ${user.email},\n\nThank you for joining our service!`
+  });
+  */
 });
 
-console.log('Worker started and listening for file processing jobs...');
+// Handle queue events
+userQueue.on('completed', (job) => {
+  console.log(`Welcome email job ${job.id} completed`);
+});
+
+userQueue.on('failed', (job, err) => {
+  console.error(`Welcome email job ${job.id} failed:`, err);
+});
+
+export { fileQueue, userQueue };
