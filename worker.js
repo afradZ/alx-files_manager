@@ -1,23 +1,26 @@
 import Bull from 'bull';
-import dbClient from './db';
-import redisClient from './redis';
+import { promises as fs } from 'fs';
+import path from 'path';
+import imageThumbnail from 'image-thumbnail';
+import dbClient from './utils/db';
+import redisClient from './utils/redis';
 
 // Initialize queues
 const fileQueue = new Bull('fileQueue', {
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || 6379,
-  },
+  }
 });
 
 const userQueue = new Bull('userQueue', {
   redis: {
     host: process.env.REDIS_HOST || 'localhost',
     port: process.env.REDIS_PORT || 6379,
-  },
+  }
 });
 
-// Process file queue for thumbnails
+// Process file queue
 fileQueue.process(async (job) => {
   const { fileId, userId } = job.data;
   
@@ -26,7 +29,7 @@ fileQueue.process(async (job) => {
 
   const file = await dbClient.db.collection('files').findOne({
     _id: dbClient.ObjectId(fileId),
-    userId: dbClient.ObjectId(userId),
+    userId: dbClient.ObjectId(userId)
   });
 
   if (!file) throw new Error('File not found');
@@ -36,53 +39,23 @@ fileQueue.process(async (job) => {
   for (const size of sizes) {
     const thumbnail = await imageThumbnail(file.localPath, { width: size });
     const thumbnailPath = `${file.localPath}_${size}`;
-    await fs.promises.writeFile(thumbnailPath, thumbnail);
+    await fs.writeFile(thumbnailPath, thumbnail);
   }
 });
 
-// Process user queue for welcome emails
+// Process user queue
 userQueue.process(async (job) => {
   const { userId } = job.data;
 
-  // Validate job data
-  if (!userId) {
-    throw new Error('Missing userId');
-  }
+  if (!userId) throw new Error('Missing userId');
 
-  // Get user from database
   const user = await dbClient.db.collection('users').findOne({
-    _id: dbClient.ObjectId(userId),
+    _id: dbClient.ObjectId(userId)
   });
 
-  if (!user) {
-    throw new Error('User not found');
-  }
-
-  // In production: Replace with actual email sending code
-  console.log(`Welcome ${user.email}!`);
-  /* 
-  // Example with Mailgun:
-  const mg = mailgun({
-    apiKey: process.env.MAILGUN_API_KEY,
-    domain: process.env.MAILGUN_DOMAIN
-  });
+  if (!user) throw new Error('User not found');
   
-  await mg.messages().send({
-    from: 'Welcome <welcome@yourdomain.com>',
-    to: user.email,
-    subject: 'Welcome to our platform!',
-    text: `Hello ${user.email},\n\nThank you for joining our service!`
-  });
-  */
-});
-
-// Handle queue events
-userQueue.on('completed', (job) => {
-  console.log(`Welcome email job ${job.id} completed`);
-});
-
-userQueue.on('failed', (job, err) => {
-  console.error(`Welcome email job ${job.id} failed:`, err);
+  console.log(`Welcome ${user.email}!`);
 });
 
 export { fileQueue, userQueue };
